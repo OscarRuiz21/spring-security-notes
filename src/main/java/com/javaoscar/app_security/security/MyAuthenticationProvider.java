@@ -12,6 +12,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.stream.Collectors;
 
 @Component
@@ -31,8 +32,7 @@ public class MyAuthenticationProvider implements AuthenticationProvider {
         final var customerPwd = customer.getPassword();
 
         if (passwordEncoder.matches(pwd, customerPwd)) {
-
-            final var authorities = Collections.singletonList(new SimpleGrantedAuthority(customer.getRole()));
+            final var authorities = List.of(new SimpleGrantedAuthority(customer.getRole()));
             return new UsernamePasswordAuthenticationToken(username, pwd, authorities);
         } else {
             throw new BadCredentialsException("Invalid credentials");
