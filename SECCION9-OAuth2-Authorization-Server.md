@@ -17,6 +17,310 @@ Convertir la aplicacion en un **Authorization Server + Resource Server** OAuth2 
 
 ---
 
+## Fundamentos Teoricos de OAuth 2.0
+
+### ¿Que problema resuelve OAuth2?
+
+Imagina este escenario: tienes una app de edicion de fotos que necesita acceder a las fotos de Google Drive del usuario. Sin OAuth2, la unica forma seria:
+
+```
+Usuario: "Aqui tienes mi email y password de Google, accede a mis fotos"
+App:     Guarda las credenciales → Login en Google → Accede a todo
+```
+
+Esto es terrible porque:
+- La app tiene **acceso total** a la cuenta de Google (no solo fotos, tambien emails, contactos, etc.)
+- Si la app es hackeada, el atacante tiene las **credenciales completas** del usuario
+- El usuario **no puede revocar** el acceso sin cambiar su password (afectando todas las apps)
+- No hay forma de dar acceso **temporal** o **limitado**
+
+OAuth2 resuelve esto con un concepto simple: **autorizacion delegada**. En vez de dar tus credenciales, das un **permiso limitado y revocable**.
+
+```
+SIN OAuth2:                              CON OAuth2:
+┌────────────┐                           ┌────────────┐
+│   App de   │  "Dame tu password"       │   App de   │  "Necesito ver tus fotos"
+│   fotos    │──────────────────►        │   fotos    │─────────────────────────►
+│            │                           │            │
+│  Tiene tu  │                           │  Tiene un  │
+│  PASSWORD  │  ← Acceso TOTAL          │   TOKEN    │  ← Solo acceso a fotos
+│            │  ← Para SIEMPRE          │            │  ← Expira en 8 horas
+│            │  ← NO revocable          │            │  ← Revocable en cualquier momento
+└────────────┘                           └────────────┘
+```
+
+### Analogia: La Tarjeta de Hotel
+
+La mejor forma de entender OAuth2 es con una analogia:
+
+```
+TU (huesped)           = Resource Owner  (dueño del recurso)
+TUS PERTENENCIAS       = Recursos protegidos (fotos, cuentas, datos)
+EL HOTEL               = Authorization Server (quien emite tarjetas)
+LA TARJETA MAGNETICA   = Access Token (permiso temporal y limitado)
+EL CUARTO              = Resource Server (donde estan los recursos)
+
+Flujo:
+1. Llegas al hotel y te IDENTIFICAS (login con credenciales)
+2. El hotel VERIFICA tu identidad
+3. El hotel te da una TARJETA MAGNETICA que:
+   - Solo abre TU cuarto (scope limitado)
+   - Expira al final de tu estadia (tiempo de vida)
+   - Puede ser DESACTIVADA por el hotel en cualquier momento (revocable)
+   - NO contiene tu informacion personal (seguridad)
+4. Usas la tarjeta para acceder a tu cuarto
+
+Tu NUNCA le das tu pasaporte al cuarto. El cuarto solo necesita
+ver que la tarjeta es valida — no necesita saber quien eres.
+```
+
+### OAuth 2.0 NO es autenticacion
+
+Esta es una confusion muy comun. Es importante entender la diferencia:
+
+| Concepto | Pregunta que responde | Ejemplo |
+|---|---|---|
+| **Autenticacion** (AuthN) | ¿**Quien** eres? | Login con email + password → "Eres Oscar" |
+| **Autorizacion** (AuthZ) | ¿**Que** puedes hacer? | "Oscar puede leer cuentas pero no borrarlas" |
+
+**OAuth 2.0 es un protocolo de AUTORIZACION**, no de autenticacion. Su objetivo es responder: "¿Esta app tiene permiso para acceder a estos recursos en nombre de este usuario?"
+
+OAuth2 por si solo **no te dice quien es el usuario**. Para eso existe **OpenID Connect (OIDC)**, que es una capa sobre OAuth2 que agrega autenticacion (identidad del usuario).
+
+```
+┌─────────────────────────────────────────────┐
+│              OpenID Connect (OIDC)           │
+│         "¿Quien es el usuario?"              │
+│         → ID Token con datos del usuario     │
+│                                              │
+│  ┌────────────────────────────────────────┐  │
+│  │           OAuth 2.0                    │  │
+│  │    "¿Que puede hacer esta app?"        │  │
+│  │    → Access Token con permisos         │  │
+│  └────────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+
+OIDC = OAuth2 + capa de identidad
+```
+
+### Los 4 Roles de OAuth2
+
+OAuth2 define exactamente 4 actores en cada interaccion:
+
+**1. Resource Owner (Dueño del recurso)**
+- Es el **usuario final** (la persona humana)
+- Posee los datos/recursos que una app quiere acceder
+- Es quien **autoriza o deniega** el acceso
+- Ejemplo: tu, cuando Google te pregunta "¿Quieres permitir que esta app vea tus fotos?"
+
+**2. Client (Cliente / Aplicacion)**
+- Es la **aplicacion** que quiere acceder a los recursos del usuario
+- NO es el usuario — es el software (una web app, una app movil, un CLI)
+- Tiene su propio `client_id` y `client_secret` para identificarse ante el Auth Server
+- En nuestro proyecto: el partner `debuggeandoideas` es un Client
+
+**3. Authorization Server (Servidor de Autorizacion)**
+- Es el **intermediario de confianza** que emite tokens
+- Autentica al usuario (login)
+- Autentica al cliente (verifica client_id + client_secret)
+- Emite access tokens, refresh tokens e ID tokens
+- Expone endpoints estandar: `/oauth2/authorize`, `/oauth2/token`, `/oauth2/jwks`
+- En nuestro proyecto: nuestra app Spring con `@Order(1)`
+
+**4. Resource Server (Servidor de Recursos)**
+- Es el **servidor que tiene los recursos protegidos** (APIs, datos)
+- Recibe requests con un access token y **valida** que sea legitimo
+- NO emite tokens — solo los valida
+- En nuestro proyecto: nuestra misma app Spring con `@Order(2)` (endpoints `/accounts`, `/loans`, etc.)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                                                          │
+│   Resource Owner ──────── "Yo autorizo"                                  │
+│        │                                                                 │
+│        │ se autentica                                                    │
+│        ▼                                                                 │
+│   Authorization Server ── "Yo emito tokens"                              │
+│        │                                                                 │
+│        │ emite token                                                     │
+│        ▼                                                                 │
+│   Client ─────────────── "Yo uso el token para pedir recursos"           │
+│        │                                                                 │
+│        │ presenta token                                                  │
+│        ▼                                                                 │
+│   Resource Server ─────── "Yo valido el token y entrego el recurso"      │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+> **Nota:** En nuestro proyecto, el Authorization Server y el Resource Server son la **misma aplicacion Spring** (pero con dos `SecurityFilterChain` separadas). En produccion es comun que sean apps diferentes.
+
+### Tokens: La Moneda de OAuth2
+
+OAuth2 trabaja con diferentes tipos de tokens. Cada uno tiene un proposito especifico:
+
+**Access Token (Token de acceso)**
+- Es el token **principal** — lo que el client usa para acceder a recursos protegidos
+- Se envia en cada request: `Authorization: Bearer eyJhbG...`
+- Tiene **vida corta** (minutos u horas) — en nuestro proyecto: 8 horas
+- Contiene **claims**: informacion como el usuario, los scopes, los roles, la expiracion
+- Puede ser un JWT (como en nuestro caso) o un token opaco
+- Si se compromete, el daño es limitado porque expira pronto
+
+**Refresh Token (Token de actualizacion)**
+- Sirve para **obtener un nuevo access token** sin que el usuario haga login de nuevo
+- Tiene **vida larga** (dias o semanas)
+- Se guarda de forma segura en el backend — nunca se envia a la API de recursos
+- El flujo: access token expira → client usa refresh token → Auth Server emite nuevo access token
+
+**ID Token (Token de identidad) — solo con OIDC**
+- Contiene informacion sobre la **identidad del usuario** (nombre, email, etc.)
+- Es siempre un JWT
+- Lo usa el Client para saber quien es el usuario, NO para acceder a recursos
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                          TOKENS                                      │
+│                                                                      │
+│  Access Token          Refresh Token          ID Token (OIDC)        │
+│  ┌────────────┐        ┌────────────┐        ┌────────────┐         │
+│  │ sub: oscar │        │            │        │ name: Oscar│         │
+│  │ scope: read│        │ (opaco)    │        │ email: ... │         │
+│  │ roles: ADM │        │            │        │ picture: ..│         │
+│  │ exp: 8hrs  │        │ exp: 30d   │        │ exp: 1hr   │         │
+│  └────────────┘        └────────────┘        └────────────┘         │
+│                                                                      │
+│  ¿Para que?            ¿Para que?            ¿Para que?              │
+│  Acceder a APIs        Renovar el            Saber QUIEN             │
+│  protegidas            access token          es el usuario           │
+│                        sin re-login                                   │
+│                                                                      │
+│  ¿Quien lo usa?        ¿Quien lo usa?        ¿Quien lo usa?         │
+│  Client → Resource     Client → Auth         Client (frontend)      │
+│  Server                Server                                        │
+│                                                                      │
+│  ¿Vida?                ¿Vida?                ¿Vida?                  │
+│  Corta (min/hrs)       Larga (dias)          Corta (min/hrs)         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Scopes: Permisos Granulares
+
+Los scopes definen **que puede hacer** un client con el access token. Son como permisos granulares:
+
+```
+Sin scopes:
+  Token → acceso a TODO (fotos, emails, contactos, calendar...)
+
+Con scopes:
+  Token [scope: photos.read] → solo puede LEER fotos
+  Token [scope: photos.read photos.write] → puede leer Y escribir fotos
+  Token [scope: email] → solo puede ver el email del usuario
+```
+
+En nuestro proyecto definimos dos scopes: `read` y `write`. El partner `debuggeandoideas` tiene ambos.
+
+Los scopes se piden al momento de solicitar autorizacion y el usuario puede aceptar o rechazar:
+
+```
+┌──────────────────────────────────────────┐
+│  "debuggeando ideas" quiere acceder a    │
+│   tu cuenta:                             │
+│                                          │
+│   [x] Leer tus datos (read)             │
+│   [x] Modificar tus datos (write)       │
+│                                          │
+│          [Autorizar]  [Cancelar]         │
+└──────────────────────────────────────────┘
+         ↑ Pantalla de consentimiento
+```
+
+### Clientes Confidenciales vs Publicos
+
+No todas las apps son iguales. OAuth2 distingue dos tipos de clientes segun su capacidad de guardar secretos:
+
+| Tipo | ¿Puede guardar un secreto? | Ejemplos | Autenticacion |
+|---|---|---|---|
+| **Confidencial** | Si — el codigo vive en un servidor seguro | Backend web (Spring, Django, Rails), servicios internos | `client_id` + `client_secret` |
+| **Publico** | No — el codigo es visible para el usuario | Apps moviles, SPA (React, Angular), apps de escritorio | Solo `client_id` + PKCE |
+
+```
+Confidencial:                           Publico:
+┌─────────────────┐                     ┌─────────────────┐
+│  Backend Server │                     │  App en el      │
+│                 │                     │  navegador      │
+│  client_secret  │ ← Seguro,          │                 │ ← El usuario puede
+│  guardado en    │   nadie lo ve      │  client_secret  │   abrir DevTools
+│  el servidor    │                     │  ??? NO SEGURO  │   y ver el secreto
+└─────────────────┘                     └─────────────────┘
+
+Solucion para publicos: PKCE (Proof Key for Code Exchange)
+→ Genera un "code_verifier" aleatorio por cada request
+→ No necesita client_secret
+```
+
+En nuestro proyecto, el partner usa `client_secret_basic` (envia client_id + client_secret en un header Basic Auth), asi que es un **cliente confidencial**.
+
+### OAuth2 vs OIDC vs SAML — ¿Cual es cual?
+
+| Protocolo | Tipo | Que hace | Formato del token | Uso tipico |
+|---|---|---|---|---|
+| **OAuth 2.0** | Autorizacion | "¿Esta app puede acceder a estos recursos?" | Access Token (JWT u opaco) | APIs, microservicios |
+| **OpenID Connect (OIDC)** | Autenticacion + Autorizacion | OAuth2 + "¿Quien es el usuario?" | Access Token + ID Token (JWT) | Login con Google/GitHub, SSO |
+| **SAML 2.0** | Autenticacion | "¿Quien es el usuario?" (empresarial) | XML assertion | SSO corporativo (Active Directory) |
+
+OIDC es lo que usamos en esta seccion (habilitamos OIDC con `.oidc(Customizer.withDefaults())`). Spring Authorization Server soporta ambos.
+
+### El Flujo Authorization Code — Paso a Paso Conceptual
+
+El `authorization_code` es el flujo **mas seguro y recomendado** de OAuth2. Se llama asi porque usa un **codigo intermedio** que luego se intercambia por tokens.
+
+¿Por que un codigo intermedio y no enviar el token directamente? **Seguridad:**
+
+```
+SIN codigo intermedio (flujo implicito — OBSOLETO):
+  Auth Server ──redirect──► Client (en la URL: token=eyJ...)
+  ⚠ El token viaja en la URL → visible en logs, historial, referer headers
+
+CON codigo intermedio (authorization_code):
+  Auth Server ──redirect──► Client (en la URL: code=abc123)
+  Client ──POST secreto──► Auth Server (code + client_secret → token)
+  ✓ El token NUNCA viaja en la URL
+  ✓ El code es de un solo uso y expira en segundos
+  ✓ El intercambio requiere client_secret (solo el backend lo tiene)
+```
+
+Flujo completo conceptual:
+
+```
+  Paso 1: El Client redirige al usuario al Auth Server
+          "Oye Auth Server, necesito acceso de lectura para este usuario"
+
+  Paso 2: El Auth Server muestra el login
+          "Usuario, ¿quien eres? Ingresa email y password"
+
+  Paso 3: El usuario se autentica
+          Auth Server valida credenciales contra la BD
+
+  Paso 4: El Auth Server muestra la pantalla de consentimiento
+          "Usuario, ¿autorizas a 'debuggeando ideas' a leer tus datos?"
+
+  Paso 5: El usuario acepta
+
+  Paso 6: El Auth Server redirige al Client con un CODIGO temporal
+          redirect → https://client.com/callback?code=abc123
+
+  Paso 7: El Client intercambia el codigo por tokens (server-to-server)
+          POST /oauth2/token
+          code=abc123 + client_id + client_secret
+          → Auth Server responde con access_token + refresh_token
+
+  Paso 8: El Client usa el access_token para acceder a recursos
+          GET /accounts  |  Authorization: Bearer eyJ...
+```
+
+---
+
 ## Flujo General de OAuth 2.0
 
 ```
