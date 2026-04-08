@@ -17,6 +17,43 @@ Convertir la aplicacion en un **Authorization Server + Resource Server** OAuth2 
 
 ---
 
+## Flujo General de OAuth 2.0
+
+```
+ Aplicacion Cliente                                        Dueño del recurso
+ ┌─────────────────┐     1. Peticion del cliente           ┌──────────────┐
+ │    ┌───┐  ┌───┐ │────────────────────────────────────► │              │
+ │    │www│  │app│ │                                       │   Usuario    │
+ │    └───┘  └───┘ │     2. Autorizacion                  │  (Resource   │
+ │                 │◄────────────────────────────────────  │   Owner)     │
+ │                 │                                       └──────────────┘
+ │                 │
+ │                 │     3. ¿Es un usuario valido?         ┌──────────────┐
+ │                 │────────────────────────────────────► │  Servidor de │
+ │                 │                                       │ autorizacion │
+ │                 │     4. Token de acceso                │  (Auth       │
+ │                 │◄────────────────────────────────────  │   Server)    │
+ │                 │                                       └──────────────┘
+ │                 │
+ │                 │     5. Token de acceso                ┌──────────────┐
+ │                 │────────────────────────────────────► │  Servidor de │
+ │                 │                                       │  recursos    │
+ │                 │     6. Recurso protegido              │  (Resource   │
+ │                 │◄────────────────────────────────────  │   Server)    │
+ └─────────────────┘                                       └──────────────┘
+```
+
+**Actores clave:**
+
+| Actor | Rol |
+|---|---|
+| **Aplicacion Cliente** | La app (web, movil, etc.) que necesita acceder a recursos protegidos |
+| **Dueño del recurso** | El usuario final que autoriza el acceso a sus datos |
+| **Servidor de autorizacion** | Valida credenciales del usuario y emite tokens de acceso |
+| **Servidor de recursos** | Posee los recursos protegidos, valida el token antes de responder |
+
+---
+
 ## Ubicacion en la Arquitectura
 
 ```
@@ -72,6 +109,20 @@ Esta seccion es la culminacion de todo el diagrama maestro (ver Seccion 1). Spri
 | **Refresh tokens** | El cliente obtiene un nuevo access_token sin pedir credenciales al usuario |
 | **Scopes** | `read`, `write` — limita lo que cada cliente puede hacer |
 | **OIDC** | OpenID Connect: ademas de autorizacion, provee identidad del usuario |
+
+### Grant Types (tipos de concesion)
+
+OAuth2 define diferentes flujos segun el tipo de cliente y caso de uso:
+
+| Grant Type | Descripcion |
+|---|---|
+| **Authorization Code** | Los clientes confidenciales y publicos intercambian un **codigo de autorizacion** por un token de acceso. Es el flujo mas seguro y el que usamos en esta seccion |
+| **PKCE** (RFC 7636) | Extension del flujo Authorization Code para **evitar ataques de inyeccion de codigo** de autorizacion y CSRF. Recomendado para apps publicas (SPA, moviles) |
+| **Client Credentials** | El cliente obtiene un token de acceso **fuera del contexto de un usuario**. Para comunicacion servidor-a-servidor (no hay usuario involucrado) |
+| **Device Code** | Para dispositivos **sin navegador o de entrada restringida** (Smart TV, CLI). El usuario autoriza en otro dispositivo con navegador |
+| **Refresh Token** | Intercambia un **token de actualizacion** por un nuevo access token cuando este ha caducado, sin re-autenticar al usuario |
+
+> En esta seccion implementamos `authorization_code` + `refresh_token`. El partner tiene ambos configurados en su campo `grant_types`.
 
 ---
 
@@ -340,6 +391,30 @@ Ya no necesitas el `JWTValidationFilter` manual de la seccion 8 — Spring lo ha
 ---
 
 ## 7. Criptografia RSA — Llaves Asimetricas
+
+### Encriptacion asimetrica RSA
+
+```
+  Servidor A                                                          Servidor B
+ ┌──────────┐                                                        ┌──────────┐
+ │          │     Texto plano      Texto cifrado      Texto plano    │          │
+ │          │    ┌──────────┐     ┌────────────┐     ┌──────────┐    │          │
+ │          │───►│          │────►│            │────►│          │───►│          │
+ │          │    └──────────┘     └────────────┘     └──────────┘    │          │
+ │          │                                                        │          │
+ └──────────┘         ▲                                   ▲          └──────────┘
+                      │                                   │
+                 Encriptacion                        Decriptacion
+                      │                                   │
+                 ┌─────────┐                        ┌─────────┐
+                 │  Llave  │                        │  Llave  │
+                 │ PRIVADA │                        │ PUBLICA │
+                 └─────────┘                        └─────────┘
+```
+
+- El **Servidor A** (Authorization Server) encripta/firma con la **llave privada** — solo el la posee
+- El **Servidor B** (Resource Server) decripta/valida con la **llave publica** — puede ser compartida libremente
+- Si alguien intercepta la llave publica, **no puede firmar tokens falsos** (necesitaria la privada)
 
 ### ¿Por que RSA en vez de HMAC?
 
